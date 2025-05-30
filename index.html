@@ -2,109 +2,105 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <title>Redirecting...</title>
-
-  <!-- Ocultar TODO el contenido -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Redireccionando...</title>
+  <!-- Ocultar contenido hasta redirección -->
   <style>
-    html, body { 
-      display: none !important; 
-      margin: 0; padding: 0; 
-    }
+    html, body { display: none !important; margin: 0; padding: 0; }
   </style>
 
-  <!-- Meta Pixel -->
+  <!-- 1. Meta Pixel Setup (solo carga una vez) -->
   <script>
     const PIXEL_ID = '1877968292965565';
     !function(f,b,e,v,n,t,s){
-      if(f.fbq) return; n=f.fbq=function(){n.callMethod?
-        n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-      if(!f._fbq) f._fbq=n; n.push=n; n.loaded=!0; n.version='2.0';
-      n.queue=[]; t=b.createElement(e); t.async=!0;
-      t.src=v; s=b.getElementsByTagName(e)[0];
+      if(f.fbq) return;
+      n=f.fbq=function(){ n.callMethod?
+        n.callMethod.apply(n,arguments):n.queue.push(arguments)
+      };
+      if(!f._fbq) f._fbq=n;
+      n.push=n; n.loaded=!0; n.version='2.0';
+      n.queue=[];
+      t=b.createElement(e); t.async=!0;
+      t.src=v;
+      s=b.getElementsByTagName(e)[0];
       s.parentNode.insertBefore(t,s);
-    }(window, document, 'script',
-      'https://connect.facebook.net/en_US/fbevents.js'
-    );
+    }(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js');
     fbq('init', PIXEL_ID);
     fbq('track', 'ViewContent');
   </script>
 </head>
 <body>
   <script>
-    const API_URL = 'https://g04vqls6ab.execute-api.us-east-2.amazonaws.com/prod/Capture_fbc-LAUTICAS';
-    const whatsappNumbers = [
-  '5491178448337',
-  '5491178450313',
-  '5491178470357',
-  '5491160530028'
-];
-
-
-
-
-    const mensajeBase = 'Hola vengo por el 200%!';
-
+    /**
+     * Bloque de utilidades
+     */
+    // Parsea cookies en un objeto clave:valor
     function parseCookies() {
-      return document.cookie
-        .split('; ')
-        .reduce((c, kv) => {
-          const [name, ...v] = kv.split('=');
-          c[name] = v.join('=');
-          return c;
-        }, {});
+      return document.cookie.split('; ').reduce((acc, kv) => {
+        const [key, ...vals] = kv.split('=');
+        acc[key] = vals.join('=');
+        return acc;
+      }, {});
     }
 
-    function generateUUID() {
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      return Array.from(bytes)
-        .map(b => b.toString(16).padStart(2,'0'))
-        .join('');
-    }
-
+    // Espera hasta que exista la cookie name o timeout (ms)
     function waitForCookie(name, timeout = 3000) {
-      return new Promise(res => {
-        const interval = 100;
-        let waited = 0;
-        const timer = setInterval(() => {
-          if (document.cookie.split('; ').some(c => c.startsWith(name + '=')) || waited >= timeout) {
-            clearInterval(timer);
-            res();
+      return new Promise(resolve => {
+        const start = Date.now();
+        (function check() {
+          if (document.cookie.split('; ').some(c => c.startsWith(name + '='))
+              || Date.now() - start > timeout) {
+            resolve();
+          } else {
+            requestAnimationFrame(check);
           }
-          waited += interval;
-        }, interval);
+        })();
       });
     }
 
+    /**
+     * Bloque principal: espera cookies, llama al backend, redirige.
+     */
     window.addEventListener('load', async () => {
-      // 1) Esperamos a que Meta Pixel fije las cookies (máx. 3s)
-      await Promise.all([ waitForCookie('_fbc'), waitForCookie('_fbp') ]);
+      try {
+        // 2. Esperar cookies _fbc y _fbp para capturar IDs
+        await Promise.all([ waitForCookie('_fbc'), waitForCookie('_fbp') ]);
+        const ck = parseCookies();
+        const fbc = ck._fbc || null;
+        const fbp = ck._fbp || null;
 
-      // 2) Leemos y construimos el payload
-      const cookies = parseCookies();
-      const id = generateUUID();
-      const payload = {
-        event:     'ViewContent',
-        timestamp: new Date().toISOString(),
-        _fbc:      cookies._fbc || null,
-        _fbp:      cookies._fbp || null,
-        id
-      };
+        // 3. Preparar payload (sin UUID, generado en backend)
+        const SUBDOMAIN = 'lauticas';
+        const payload = { subdomain: SUBDOMAIN, fbc, fbp };
 
-      // 3) Enviamos al API
-      fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      .catch(() => {})
-      .finally(() => {
-        // 4) Redirección inmediata a WhatsApp
-        const num = whatsappNumbers[Math.floor(Math.random() * whatsappNumbers.length)];
-        const texto = `${mensajeBase} Mi código promocional es: ${id}`;
-        window.location.href = `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
-      });
+        // 4. Llamada a Lambda LineManager
+        const API_URL = `https://t6cq896p7i.execute-api.us-east-2.amazonaws.com/prod/active-line`;
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error(`LineManager error: ${response.status}`);
+
+        const data = await response.json();
+        const { whatsapp_number: number, uuid } = data;
+        if (!number || !uuid) throw new Error('Respuesta inválida de LineManager');
+
+        // 5. Redirigir a WhatsApp con mensaje que incluye UUID   
+        // 1. Literal del mensaje, cerrado con backtick
+        const message = `Hola, vengo por la promo del 200% extra! Mi código promocional es: ${uuid}`;
+        
+        // 2. Literal de la URL, también con backticks bien balanceados
+        const waUrl   = `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
+        
+        // 3. Ahora sí rediriges
+        window.location.href = waUrl;
+        } catch (err) {
+        console.error('Error en redirección:', err);
+        // Aquí podrías mostrar un mensaje al usuario o un fallback
+      }
     });
+
   </script>
 </body>
 </html>
